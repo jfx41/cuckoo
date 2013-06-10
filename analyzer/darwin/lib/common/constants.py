@@ -11,7 +11,8 @@ def _rand_string(a, b):
                    for x in xrange(random.randint(a, b)))
 
 #ROOT = os.path.join(os.getenv("SystemDrive"), "\\", _rand_string(6, 10))
-ROOT = os.path.join("/", _rand_string(6, 10))
+#ROOT = os.path.join("/Users/vrtareo/Analysis", _rand_string(6, 10))
+ROOT = os.path.join("/tmp", _rand_string(6, 10))
 
 PATHS = {"root"   : ROOT,
          "logs"   : os.path.join(ROOT, "logs"),

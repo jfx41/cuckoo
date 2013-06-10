@@ -2,8 +2,10 @@
 # This file is part of Cuckoo Sandbox - http://www.cuckoosandbox.org
 # See the file 'docs/LICENSE' for copying permission.
 
+#import pdb
 import os
 import sys
+import math
 import struct
 import string
 import random
@@ -11,21 +13,23 @@ import shutil
 import pkgutil
 import logging
 import hashlib
+import commands
 import xmlrpclib
 from ctypes import *
 from threading import Lock, Thread
 from datetime import datetime
+from time import sleep
 
 #from lib.api.process import Process
-#from lib.common.exceptions import CuckooError, CuckooPackageError
-#from lib.common.abstracts import Package, Auxiliary
+from lib.common.exceptions import CuckooError, CuckooPackageError
+from lib.common.abstracts import Package, Auxiliary
 #from lib.common.defines import *
 from lib.common.constants import PATHS, PIPE
-#from lib.common.results import upload_to_host
-#from lib.core.config import Config
-#from lib.core.startup import create_folders, init_logging
+from lib.common.results import upload_to_host
+from lib.core.config import Config
+from lib.core.startup import create_folders, init_logging
 #from lib.core.privileges import grant_debug_privilege
-#from lib.core.packages import choose_package
+from lib.core.packages import choose_package
 #import modules.auxiliary as auxiliary
 
 log = logging.getLogger()
@@ -39,6 +43,64 @@ PROCESS_LOCK = Lock()
 PID = os.getpid()
 #PPID = Process(pid=PID).get_parent_pid()
 
+class MachO:
+    def __init__(self, filename):
+        print "FILENAME: %s" % filename
+        self.filename=filename
+
+    def callSystemCmd(self, cmd):
+        results=commands.getstatusoutput(cmd)
+        return results[1] #[0]=Execution Status, [1]=CMD output
+  
+    # hexdump
+    def getHexDump(self):
+      cmd="hexdump -Cv "+self.filename
+      results=self.callSystemCmd(cmd)
+      return results
+
+    # otool -h <filename>
+    def getMachHeader(self):
+      cmd="otool -h "+self.filename
+      results=self.callSystemCmd(cmd)
+      return results
+
+    # otool -f <filename>
+    def getFatHeader(self):
+        cmd="otool -f "+self.filename
+        results=self.callSystemCmd(cmd)
+        return results
+  
+    # otool -L <filename>
+    def getLibraries(self): # External Libraries
+        cmd="otool -L "+self.filename
+        results=self.callSystemCmd(cmd)
+        return results
+  
+    # otool -l <filename>
+    def getLoadCmds(self): # Segment & Section Information
+        cmd="otool -l "+self.filename
+        results=self.callSystemCmd(cmd)
+        return results
+  
+    # nm -a <filename>
+    def getSymbolTable(self):
+        cmd="nm -a "+self.filename
+        results=self.callSystemCmd(cmd)
+        return results
+  
+    def getEntropy(data):
+        """Calculate the entropy of a chunk of data."""
+        if not data:
+            return 0
+  
+        entropy = 0
+        for x in range(256):
+            p_x = float(data.count(chr(x)))/len(data)
+            if p_x>0:
+                entropy += - p_x*math.log(p_x, 2)
+  
+        return entropy
+  
 ## this is still preparation status - needs finalizing
 def protected_filename(fname):
     """Checks file name against some protected names."""
@@ -73,40 +135,41 @@ def add_file(file_path):
 
 def dump_file(file_path):
     """Create a copy of the give file path."""
-#    try:
-#        if os.path.exists(file_path):
-#            sha256 = hashlib.sha256(open(file_path, "rb").read()).hexdigest()
-#            if sha256 in DUMPED_LIST:
-#                # The file was already dumped, just skip.
-#                return
-#        else:
-#            log.warning("File at path \"%s\" does not exist, skip", file_path)
-#            return
-#    except IOError as e:
-#        log.warning("Unable to access file at path \"%s\": %s", file_path, e)
-#        return
-#
-#    # 32k is the maximum length for a filename
-#    path = create_unicode_buffer(32 * 1024)
-#    name = c_wchar_p()
+    try:
+        if os.path.exists(file_path):
+            sha256 = hashlib.sha256(open(file_path, "rb").read()).hexdigest()
+            if sha256 in DUMPED_LIST:
+                # The file was already dumped, just skip.
+                return
+        else:
+            log.warning("File at path \"%s\" does not exist, skip", file_path)
+            return
+    except IOError as e:
+        log.warning("Unable to access file at path \"%s\": %s", file_path, e)
+        return
+
+    # 32k is the maximum length for a filename
+    path = create_unicode_buffer(32 * 1024)
+    name = c_wchar_p()
 #    KERNEL32.GetFullPathNameW(file_path, 32 * 1024, path, byref(name))
-#    file_path = path.value
-#    
-#    # Check if the path has a valid file name, otherwise it's a directory
-#    # and we should abort the dump.
-#    if name.value:
-#        # Should be able to extract Alternate Data Streams names too.
-#        file_name = name.value[name.value.find(":")+1:]
-#    else:
-#        return
-#
-#    upload_path = os.path.join("files", str(random.randint(100000000, 9999999999)), file_name)
-#    try:
-#        upload_to_host(file_path, upload_path)
-#        DUMPED_LIST.append(sha256)
-#    except (IOError, socket.error) as e:
-#        log.error("Unable to upload dropped file at path \"%s\": %s", file_path, e)
-#
+    file_path = path.value
+    logging.log("INFO: file_path %s" % file_path)
+    
+    # Check if the path has a valid file name, otherwise it's a directory
+    # and we should abort the dump.
+    if name.value:
+        # Should be able to extract Alternate Data Streams names too.
+        file_name = name.value[name.value.find(":")+1:]
+    else:
+        return
+
+    upload_path = os.path.join("files", str(random.randint(100000000, 9999999999)), file_name)
+    try:
+        upload_to_host(file_path, upload_path)
+        DUMPED_LIST.append(sha256)
+    except (IOError, socket.error) as e:
+        log.error("Unable to upload dropped file at path \"%s\": %s", file_path, e)
+
 def del_file(fname):
     dump_file(fname)
 
@@ -145,19 +208,19 @@ class PipeHandler(Thread):
 
     def __init__(self, h_pipe):
         """@param h_pipe: PIPE to read."""
-#        Thread.__init__(self)
-#        self.h_pipe = h_pipe
-#
+        Thread.__init__(self)
+        self.h_pipe = h_pipe
+
     def run(self):
         """Run handler.
         @return: operation status.
         """
-#        data = ""
-#        response = "OK"
-#        wait = False
-#        proc = None
-#
-#        # Read the data submitted to the Pipe Server.
+        data = ""
+        response = "OK"
+        wait = False
+        proc = None
+
+        # Read the data submitted to the Pipe Server.
 #        while True:
 #            bytes_read = c_int(0)
 #
@@ -281,15 +344,15 @@ class PipeHandler(Thread):
 #
 #        KERNEL32.CloseHandle(self.h_pipe)
 #
-#        # We wait until cuckoomon reports back.
-#        if wait:
-#            proc.wait()
-#
-#        if proc:
-#            proc.close()
-#
-#        return True
-#
+        # We wait until cuckoomon reports back.
+        if wait:
+            proc.wait()
+
+        if proc:
+            proc.close()
+
+        return True
+
 class PipeServer(Thread):
     """Cuckoo PIPE server.
 
@@ -299,18 +362,19 @@ class PipeServer(Thread):
 
     def __init__(self, pipe_name=PIPE):
         """@param pipe_name: Cuckoo PIPE server name."""
-#        Thread.__init__(self)
-#        self.pipe_name = pipe_name
-#        self.do_run = True
-#
+        Thread.__init__(self)
+        self.pipe_name = pipe_name
+        self.do_run = True
+
     def stop(self):
         """Stop PIPE server."""
-#        self.do_run = False
-#
+        self.do_run = False
+
     def run(self):
         """Create and run PIPE server.
         @return: operation status.
         """
+        return True
 #        while self.do_run:
 #            # Create the Named Pipe.
 #            h_pipe = KERNEL32.CreateNamedPipeA(self.pipe_name,
@@ -356,18 +420,18 @@ class Analyzer:
         """Prepare env for analysis."""
         # Get SeDebugPrivilege for the Python process. It will be needed in
         # order to perform the injections.
-#        grant_debug_privilege()
-#
-#        # Create the folders used for storing the results.
-#        create_folders()
-#
-#        # Initialize logging.
-#        init_logging()
-#
-#        # Parse the analysis configuration file generated by the agent.
-#        self.config = Config(cfg="analysis.conf")
-#
-#        # Set virtual machine clock.
+        #grant_debug_privilege()
+
+        # Create the folders used for storing the results.
+        create_folders()
+
+        # Initialize logging.
+        init_logging()
+
+        # Parse the analysis configuration file generated by the agent.
+        self.config = Config(cfg="analysis.conf")
+
+        # Set virtual machine clock.
 #        clock = datetime.strptime(self.config.clock, "%Y%m%dT%H:%M:%S")
 #        # Setting date and time.
 #        # NOTE: Windows system has only localized commands with date format
@@ -379,22 +443,25 @@ class Analyzer:
 #        os.system("echo:|date {0}".format(clock.strftime("%m-%d-%y")))
 #        os.system("echo:|time {0}".format(clock.strftime("%H:%M:%S")))
 #
-#        # Initialize and start the Pipe Servers. This is going to be used for
-#        # communicating with the injected and monitored processes.
-#        for x in xrange(self.PIPE_SERVER_COUNT):
-#            self.pipes[x] = PipeServer()
-#            self.pipes[x].daemon = True
-#            self.pipes[x].start()
-#
-#        # We update the target according to its category. If it's a file, then
-#        # we store the path.
-#        if self.config.category == "file":
-#            self.target = os.path.join(os.environ["TEMP"] + os.sep,
-#                                       str(self.config.file_name))
-#        # If it's a URL, well.. we store the URL.
-#        else:
-#            self.target = self.config.target
-#
+        # Initialize and start the Pipe Servers. This is going to be used for
+        # communicating with the injected and monitored processes.
+        for x in xrange(self.PIPE_SERVER_COUNT):
+            self.pipes[x] = PipeServer()
+            self.pipes[x].daemon = True
+            self.pipes[x].start()
+
+        # We update the target according to its category. If it's a file, then
+        # we store the path.
+        if self.config.category == "file":
+            #
+            #self.target = os.path.join(os.environ["TEMP"] + os.sep,
+            #                           str(self.config.file_name))
+            self.target = os.path.join("/tmp" + os.sep,
+                                       str(self.config.file_name))
+        # If it's a URL, well.. we store the URL.
+        else:
+            self.target = self.config.target
+
     def get_options(self):
         """Get analysis options.
         @return: options dict.
@@ -446,188 +513,216 @@ class Analyzer:
         log.info("Starting analyzer from: %s" % os.getcwd())
         log.info("Storing results at: %s" % PATHS["root"])
         log.info("Pipe server name: %s" % PIPE)
+        log.info("Jamming static analysis output into %s" % PATHS["logs"])
 
-#        # If no analysis package was specified at submission, we try to select
-#        # one automatically.
-#        if not self.config.package:
-#            log.info("No analysis package specified, trying to detect it automagically")
-#            # If the analysis target is a file, we choose the package according
-#            # to the file format.
-#            if self.config.category == "file":
-#                package = choose_package(self.config.file_type, self.config.file_name)
-#            # If it's an URL, we'll just use the default Internet Explorer
-#            # package.
-#            else:
-#                package = "ie"
-#
-#            # If we weren't able to automatically determine the proper package,
-#            # we need to abort the analysis.
-#            if not package:
-#                raise CuckooError("No valid package available for file type: %s"
-#                                  % self.config.file_type)
-#
-#            log.info("Automatically selected analysis package \"%s\"", package)
-#        # Otherwise just select the specified package.
-#        else:
-#            package = self.config.package
-#
-#        # Generate the package path.
-#        package_name = "modules.packages.%s" % package
-#
-#        # Try to import the analysis package.
-#        try:
-#            __import__(package_name, globals(), locals(), ["dummy"], -1)
-#        # If it fails, we need to abort the analysis.
-#        except ImportError:
-#            raise CuckooError("Unable to import package \"{0}\", does not exist.".format(package_name))
-#
-#        # Initialize the package parent abstract.
-#        Package()
-#
-#        # Enumerate the abstract's subclasses.
-#        try:
-#            package_class = Package.__subclasses__()[0]
-#        except IndexError as e:
-#            raise CuckooError("Unable to select package class (package={0}): {1}".format(package_name, e))
-#
-#        # Initialize the analysis package.
-#        pack = package_class(self.get_options())
-#
-#        # Initialize Auxiliary modules
-#        Auxiliary()
-#        prefix = auxiliary.__name__ + "."
-#        for loader, name, ispkg in pkgutil.iter_modules(auxiliary.__path__, prefix):
-#            if ispkg:
-#                continue
-#
-#            # Import the auxiliary module.
-#            try:
-#                __import__(name, globals(), locals(), ["dummy"], -1)
-#            except ImportError as e:
-#                log.warning("Unable to import the auxiliary module \"%s\": %s", name, e)
-#
-#        # Walk through the available auxiliary modules.
-#        aux_enabled = []
-#        for module in Auxiliary.__subclasses__():
-#            # Try to start the auxiliary module.
-#            try:
-#                aux = module()
-#                aux.start()
-#            except (NotImplementedError, AttributeError):
-#                log.warning("Auxiliary module %s was not implemented", aux.__class__.__name__)
-#                continue
-#            except Exception as e:
-#                log.warning("Cannot execute auxiliary module %s: %s", aux.__class__.__name__, e)
-#                continue
-#            finally:
-#                aux_enabled.append(aux)
-#
-#        # Start analysis package. If for any reason, the execution of the
-#        # analysis package fails, we have to abort the analysis.
-#        try:
-#            pids = pack.start(self.target)
-#        except NotImplementedError:
-#            raise CuckooError("The package \"{0}\" doesn't contain a run "
-#                              "function.".format(package_name))
-#        except CuckooPackageError as e:
-#            raise CuckooError("The package \"{0}\" start function raised an "
-#                              "error: {1}".format(package_name, e))
-#        except Exception as e:
-#            raise CuckooError("The package \"{0}\" start function encountered "
-#                              "an unhandled exception: {1}".format(package_name, e))
-#
-#        # If the analysis package returned a list of process IDs, we add them
-#        # to the list of monitored processes and enable the process monitor.
-#        if pids:
-#            add_pids(pids)
-#            pid_check = True
-#        # If the package didn't return any process ID (for example in the case
-#        # where the package isn't enabling any behavioral analysis), we don't
-#        # enable the process monitor.
-#        else:
-#            log.info("No process IDs returned by the package, running for the full timeout")
-#            pid_check = False
-#
-#        # Check in the options if the user toggled the timeout enforce. If so,
-#        # we need to override pid_check and disable process monitor.
-#        if self.config.enforce_timeout:
-#            log.info("Enabled timeout enforce, running for the full timeout")
-#            pid_check = False
-#
-#        time_counter = 0
-#
-#        while True:
-#            time_counter += 1
-#            if time_counter == int(self.config.timeout):
-#                log.info("Analysis timeout hit, terminating analysis")
-#                break
-#
-#            # If the process lock is locked, it means that something is
-#            # operating on the list of monitored processes. Therefore we cannot
-#            # proceed with the checks until the lock is released.
-#            if PROCESS_LOCK.locked():
-#                KERNEL32.Sleep(1000)
-#                continue
-#
-#            try:
-#                # If the process monitor is enabled we start checking whether
-#                # the monitored processes are still alive.
-#                if pid_check:
-#                    for pid in PROCESS_LIST:
-#                        if not Process(pid=pid).is_alive():
-#                            log.info("Process with pid %s has terminated", pid)
-#                            PROCESS_LIST.remove(pid)
-#
-#                    # If none of the monitored processes are still alive, we
-#                    # can terminate the analysis.
-#                    if len(PROCESS_LIST) == 0:
-#                        log.info("Process list is empty, terminating analysis...")
-#                        break
-#
-#                    # Update the list of monitored processes available to the
-#                    # analysis package. It could be used for internal operations
-#                    # within the module.
-#                    pack.set_pids(PROCESS_LIST)
-#
-#                try:
-#                    # The analysis packages are provided with a function that
-#                    # is executed at every loop's iteration. If such function
-#                    # returns False, it means that it requested the analysis
-#                    # to be terminate.
-#                    if not pack.check():
-#                        log.info("The analysis package requested the termination of the analysis...")
-#                        break
-#                # If the check() function of the package raised some exception
-#                # we don't care, we can still proceed with the analysis but we
-#                # throw a warning.
-#                except Exception as e:
-#                    log.warning("The package \"%s\" check function raised "
-#                                "an exception: %s", package_name, e)
-#            finally:
-#                # Zzz.
-#                KERNEL32.Sleep(1000)
-#
-#        try:
-#            # Before shutting down the analysis, the package can perform some
-#            # final operations through the finish() function.
-#            pack.finish()
-#        except Exception as e:
-#            log.warning("The package \"%s\" finish function raised an "
-#                        "exception: %s", package_name, e)
-#
-#        # Terminate the Auxiliary modules.
-#        for aux in aux_enabled:
-#            try:
-#                aux.stop()
-#            except Exception as e:
-#                log.warning("Cannot terminate auxiliary module %s: %s",
-#                            aux.__class__.__name__, e)
-#
-#        # Let's invoke the completion procedure.
-#        self.complete()
-#
-#        return True
-#
+        static_analysis = []
+        sample = MachO(os.path.join("/tmp", self.config.file_name))
+        static_analysis.append(sample.getHexDump())
+        #static_analysis.append(sample.getSymbolTable())
+        #static_analysis.append(sample.getMachHeader())
+        #static_analysis.append(sample.getFatHeader())
+        #static_analysis.append(sample.getLibraries())
+        #static_analysis.append(sample.getLoadCmds())
+        #static_analysis.append(sample.getSymbolTable())
+
+        
+        report = os.path.join(PATHS["files"], "static-analysis.txt")
+
+        f = open(report, "w")
+        f.write("self.config.file_name: %s\n" % self.config.file_name)
+
+        for report_type in static_analysis:
+            f.write(report_type)
+            f.write("\n\n----------------------------------------------\n\n")
+
+        #add_file(report)
+        log.info("Trying to add a darn file: %s" % add_file(report))
+
+        #pdb.set_trace()
+
+        # If no analysis package was specified at submission, we try to select
+        # one automatically.
+        if not self.config.package:
+            log.info("No analysis package specified, trying to detect it automagically")
+            # If the analysis target is a file, we choose the package according
+            # to the file format.
+            if self.config.category == "file":
+                package = choose_package(self.config.file_type, self.config.file_name)
+            # If it's an URL, we'll just use the default Internet Explorer
+            # package.
+            else:
+                package = "ie"
+
+            # If we weren't able to automatically determine the proper package,
+            # we need to abort the analysis.
+            if not package:
+                raise CuckooError("No valid package available for file type: %s"
+                                  % self.config.file_type)
+
+            log.info("Automatically selected analysis package \"%s\"", package)
+        # Otherwise just select the specified package.
+        else:
+            package = self.config.package
+
+        # Generate the package path.
+        package_name = "modules.packages.%s" % package
+
+        # Try to import the analysis package.
+        try:
+            __import__(package_name, globals(), locals(), ["dummy"], -1)
+        # If it fails, we need to abort the analysis.
+        except ImportError:
+            raise CuckooError("Unable to import package \"{0}\", does not exist.".format(package_name))
+
+        # Initialize the package parent abstract.
+        Package()
+
+        # Enumerate the abstract's subclasses.
+        try:
+            package_class = Package.__subclasses__()[0]
+        except IndexError as e:
+            raise CuckooError("Unable to select package class (package={0}): {1}".format(package_name, e))
+
+        # Initialize the analysis package.
+        pack = package_class(self.get_options())
+
+        # Initialize Auxiliary modules
+        Auxiliary()
+        prefix = auxiliary.__name__ + "."
+        for loader, name, ispkg in pkgutil.iter_modules(auxiliary.__path__, prefix):
+            if ispkg:
+                continue
+
+            # Import the auxiliary module.
+            try:
+                __import__(name, globals(), locals(), ["dummy"], -1)
+            except ImportError as e:
+                log.warning("Unable to import the auxiliary module \"%s\": %s", name, e)
+
+        # Walk through the available auxiliary modules.
+        aux_enabled = []
+        for module in Auxiliary.__subclasses__():
+            # Try to start the auxiliary module.
+            try:
+                aux = module()
+                aux.start()
+            except (NotImplementedError, AttributeError):
+                log.warning("Auxiliary module %s was not implemented", aux.__class__.__name__)
+                continue
+            except Exception as e:
+                log.warning("Cannot execute auxiliary module %s: %s", aux.__class__.__name__, e)
+                continue
+            finally:
+                aux_enabled.append(aux)
+
+        # Start analysis package. If for any reason, the execution of the
+        # analysis package fails, we have to abort the analysis.
+        try:
+            pids = pack.start(self.target)
+        except NotImplementedError:
+            raise CuckooError("The package \"{0}\" doesn't contain a run "
+                              "function.".format(package_name))
+        except CuckooPackageError as e:
+            raise CuckooError("The package \"{0}\" start function raised an "
+                              "error: {1}".format(package_name, e))
+        except Exception as e:
+            raise CuckooError("The package \"{0}\" start function encountered "
+                              "an unhandled exception: {1}".format(package_name, e))
+
+        # If the analysis package returned a list of process IDs, we add them
+        # to the list of monitored processes and enable the process monitor.
+        if pids:
+            add_pids(pids)
+            pid_check = True
+        # If the package didn't return any process ID (for example in the case
+        # where the package isn't enabling any behavioral analysis), we don't
+        # enable the process monitor.
+        else:
+            log.info("No process IDs returned by the package, running for the full timeout")
+            pid_check = False
+
+        # Check in the options if the user toggled the timeout enforce. If so,
+        # we need to override pid_check and disable process monitor.
+        if self.config.enforce_timeout:
+            log.info("Enabled timeout enforce, running for the full timeout")
+            pid_check = False
+
+        time_counter = 0
+
+        while True:
+            time_counter += 1
+            if time_counter == int(self.config.timeout):
+                log.info("Analysis timeout hit, terminating analysis")
+                break
+
+            # If the process lock is locked, it means that something is
+            # operating on the list of monitored processes. Therefore we cannot
+            # proceed with the checks until the lock is released.
+            if PROCESS_LOCK.locked():
+                #KERNEL32.Sleep(1000)
+                time.sleep(1000)
+                continue
+
+            try:
+                # If the process monitor is enabled we start checking whether
+                # the monitored processes are still alive.
+                if pid_check:
+                    for pid in PROCESS_LIST:
+                        if not Process(pid=pid).is_alive():
+                            log.info("Process with pid %s has terminated", pid)
+                            PROCESS_LIST.remove(pid)
+
+                    # If none of the monitored processes are still alive, we
+                    # can terminate the analysis.
+                    if len(PROCESS_LIST) == 0:
+                        log.info("Process list is empty, terminating analysis...")
+                        break
+
+                    # Update the list of monitored processes available to the
+                    # analysis package. It could be used for internal operations
+                    # within the module.
+                    pack.set_pids(PROCESS_LIST)
+
+                try:
+                    # The analysis packages are provided with a function that
+                    # is executed at every loop's iteration. If such function
+                    # returns False, it means that it requested the analysis
+                    # to be terminate.
+                    if not pack.check():
+                        log.info("The analysis package requested the termination of the analysis...")
+                        break
+                # If the check() function of the package raised some exception
+                # we don't care, we can still proceed with the analysis but we
+                # throw a warning.
+                except Exception as e:
+                    log.warning("The package \"%s\" check function raised "
+                                "an exception: %s", package_name, e)
+            finally:
+                # Zzz.
+                #KERNEL32.Sleep(1000)
+                time.sleep(1000)
+
+        try:
+            # Before shutting down the analysis, the package can perform some
+            # final operations through the finish() function.
+            pack.finish()
+        except Exception as e:
+            log.warning("The package \"%s\" finish function raised an "
+                        "exception: %s", package_name, e)
+
+        # Terminate the Auxiliary modules.
+        for aux in aux_enabled:
+            try:
+                aux.stop()
+            except Exception as e:
+                log.warning("Cannot terminate auxiliary module %s: %s",
+                            aux.__class__.__name__, e)
+
+        # Let's invoke the completion procedure.
+        self.complete()
+
+        return True
+
 if __name__ == "__main__":
     success = False
     error = ""
@@ -659,4 +754,6 @@ if __name__ == "__main__":
         # Establish connection with the agent XMLRPC server.
         #server = xmlrpclib.Server("http://127.0.0.1:8000")
         server = xmlrpclib.Server("http://127.0.0.1:8000", allow_none=True)
-        server.complete(success, error, PATHS["root"])
+        logging.critical("success: %s, error: %s, PATHS[root]: %s" % (success, error, PATHS["root"]))
+        server.complete(True, error, PATHS["root"])
+
