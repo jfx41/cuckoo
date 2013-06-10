@@ -1,0 +1,67 @@
+If you are looking to utilize Cuckoo to run OSX VMs, you have a few options, but the ones I'll  touch briefly on from my personal experience are:
+
+  1. Virtualbox
+  2. VMware Fusion
+
+
+
+
+Virtualbox Pros:
+
+  1. Cuckoo defaults to Virtualbox as it's preferred Virtualization platform.
+  2. You can sniff guest VMs directly on the vboxnetN interfaces.
+
+Virtualbox Cons:
+
+  1. Best I can tell, you've got to do some "hackintoshing" to get a VM working.  There are guides out there, and most of them have you hacking bootloaders bittorrenting a "popular distro of Mac OS X".
+  2. You should be aware of a number of important issues before attempting to install a Mac OS X guest: https://www.virtualbox.org/manual/ch03.html#intro-macosxguests
+
+     2.1. Mac OS X is commercial, licensed software and contains both license and technical restrictions that limit its use to certain hardware and usage scenarios. It is important that you understand and obey these restrictions.
+
+        In particular, for most versions of Mac OS X, Apple prohibits installing them on non-Apple hardware.
+
+        These license restrictions are also enforced on a technical level. Mac OS X verifies whether it is running on Apple hardware, and most DVDs that that come with Apple hardware even check for an exact model. These restrictions are not circumvented by VirtualBox and continue to apply.
+
+     2.2. Only CPUs known and tested by Apple are supported. As a result, if your Intel CPU is newer than the build of Mac OS X, or if you have a non-Intel CPU, it will most likely panic during bootup with an "Unsupported CPU" exception. It is generally best to use the Mac OS X DVD that came with your Apple hardware.
+
+     2.3. The Mac OS X installer expects the harddisk to be partitioned so when it does not offer a selection, you have to launch the Disk Utility from the "Tools" menu and partition the hard disk. Then close the Disk Utility and proceed with the installation.
+
+     2.4. In addition, as Mac OS X support in VirtualBox is currently still experimental, please refer also to Chapter 14, Known limitations.
+
+
+  3. On Mac OS X hosts, the following features are not yet implemented: https://www.virtualbox.org/manual/ch14.html#KnownProblems
+
+        3.1. Numlock emulation
+        3.2. CPU frequency metric
+        3.3. Memory ballooning
+        3.4. Mac OS X guests:
+
+  4. Mac OS X guests: https://www.virtualbox.org/manual/ch14.html#KnownProblems
+
+    4.1. Mac OS X guests can only run on a certain host hardware. For details about license and host hardware limitations, please see the section called “Mac OS X guests” and check the Apple software license conditions.
+    4.2. VirtualBox does not provide Guest Additions for Mac OS X at this time.
+    4.3. The graphics resolution currently defaults to 1024x768 as Mac OS X falls back to the built-in EFI display support. See the section called “Video modes in EFI” for more information on how to change EFI video modes.
+    4.4. Even when idle, Mac OS X guests currently burn 100% CPU. This is a power management issue that will be addressed in a future release.
+    4.5. Mac OS X guests only work with one CPU assigned to the VM. Support for SMP will be provided in a future release.
+    4.6. Depending on your system and version of Mac OS X, you might experience guest hangs after some time. This can be fixed by turning off energy saving (set timeout to "Never") in the system preferences.
+    4.7. By default, the VirtualBox EFI enables debug output of the Mac OS X kernel to help you diagnose boot problems. Note that there is a lot of output and not all errors are fatal (they would also show on your physical Mac). You can turn off these messages by issuing this command:
+
+      VBoxManage setextradata "VM name" "VBoxInternal2/EfiBootArgs" "  "
+
+    4.8. To revert to the previous behavior, use:
+
+      VBoxManage setextradata "VM name" "VBoxInternal2/EfiBootArgs" ""
+
+
+---------------------------------------------------------------------------------------------------
+
+
+VMware Fusion Pros:
+
+  1. Getting a VM installed using legit media and sticking within Apple's licensing is straightforward.
+  2. It just works.
+
+VMware Fusion Cons:
+
+  1. You can't directly sniff on vmnet interfaces.  You have to use VMware's vmnet-sniffer program.  Limited and lame doesn't begin to describe vmnet-sniffer.
+
