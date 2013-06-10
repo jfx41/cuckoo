@@ -1,0 +1,225 @@
+#!/usr/bin/env bash
+# Copyright (C) 2010-2013 Cuckoo Sandbox Developers.
+# This file is part of Cuckoo Sandbox - http://www.cuckoosandbox.org
+# See the file 'docs/LICENSE' for copying permission.
+
+#
+# This is an attempt at a dirty workaround for the inability to
+# sniff directly on a vmnet interface on a Mac using VMware Fusion.
+#
+# This is a tcpdump wrapper which utilizes the vmnet-sniffer tool
+# that *can* capture on a vmnet interface.
+#
+
+LOG=/tmp/fusion-sniffer.log
+echo "$@" >> $LOG
+
+PID=$$
+
+#if test $(id -g) -ne 0
+if test $(id -g) -eq 191919
+then
+  echo "ERROR: $(basename $0) requires root privileges to access vmnet interfaces."
+  echo "$@" >> $LOG
+  exit 1
+fi
+
+function check_pcap
+{
+  if test -z "$1"; then
+    return -1
+  elif test ! -z "$1" -a ! -z "$(basename $1 | grep -i \.pcap)"; then
+    return 0
+  else
+    return 1
+  fi
+}
+
+function check_vmnet
+{
+  if test -z "$1"; then
+    return -1
+  elif test ! -z "$1" -a ! -z "$(echo $1 | grep -i ^vmnet)"; then
+    return 0
+  else
+    return 1
+  fi
+}
+ 
+# There has to be an easier way to do this, but I'm too tired
+# to figure out what it is.
+while :
+do
+  case $1 in
+  -i | --interface)
+      if test ! -z "$VMNET"; then
+        echo "ERROR: Interface already specified as '$VMNET'" >> $LOG
+        exit 1
+      elif $(check_vmnet $2); then
+        VMNET=$2
+        shift 2
+      else
+        echo "ERROR: You must specify a vmnet interface to sniff on, not '$2'." >> $LOG
+        exit 1
+      fi
+     ;;
+  --interface=*)
+      ARG=${1#*=} # Delete everything up till "="
+      if $(check_vmnet $ARG); then
+        VMNET=$ARG
+        shift
+      else
+        echo "ERROR: You must specify a vmnet interface to sniff on, not '$ARG'." >> $LOG
+        exit 1
+      fi
+      ;;
+  -w | --write)
+      if test ! -z "$PCAP"; then
+        echo "ERROR: Output pcap already specified as '$PCAP'" >> $LOG
+        exit 1
+      elif $(check_pcap $2); then
+        PCAP=$2
+        shift 2
+      else
+        echo "ERROR: You must specify a pcap file to write, not '$2'." >> $LOG
+        exit 1
+      fi
+     ;;
+  --write=*)
+      ARG=${1#*=} # Delete everything up till "="
+      if $(check_pcap $ARG); then
+        PCAP=$ARG
+        shift
+      else
+        echo "ERROR: You must specify a pcap file to write, not '$ARG'." >> $LOG
+        exit 1
+      fi
+      ;;
+  -Z)
+      if test ! -z "$DROP_PRIV"; then
+        echo "ERROR: Output pcap already specified as '$DROP_PRIV'" >> $LOG
+        exit 1
+      elif test ! -z "$2"; then
+        DROP_PRIV=$2
+        shift 2
+      else
+        echo "ERROR: You must specify a user to drop privs back to, not '$2'." >> $LOG
+        exit 1
+      fi
+     ;;
+    --) # End of all options
+      shift
+      break
+      ;;
+  -*)
+      ARGS="$ARGS $1"
+      shift
+      ;;
+  *)  # no more options. Stop while loop
+      break
+      ;;
+  esac
+  # The while loop will pick up all options that start with -
+  # This picks up all options that don't start with -
+  if test ! -z "$(echo $1 | grep -- '^[^\-]')"; then
+    ARGS="$ARGS $1"
+  fi
+done
+
+if test -z "$VMNET"; then
+  echo "ERROR: A vmnet interface was not specified via -i or --interface" >> $LOG
+  exit 1
+elif test -z "$PCAP"; then
+  echo "ERROR: A pcap file was not specified via -w or --write" >> $LOG
+  exit 1
+fi
+
+echo "VMNET: $VMNET -> $PCAP" >> $LOG
+echo "$ARGS $@" >> $LOG
+
+
+#
+# Original script from tehmaze @ https://gist.github.com/tehmaze/1116940
+
+# Fusion 4: /Library/Application Support/VMware Fusion/vmnet-sniffer
+FUSION4="/Library/Application Support/VMware Fusion/vmnet-sniffer"
+
+# Fusion 5: /Applications/VMware Fusion.app/Contents/Library/vmnet-sniffer
+FUSION5="/Applications/VMware Fusion.app/Contents/Library/vmnet-sniffer"
+
+# Hopefully already in our $PATH
+SNIFFER=$(which vmnet-sniffer)
+if test -z "$SNIFFER"; then
+  if test -x "$FUSION5"; then
+    SNIFFER="$FUSION5"
+  elif test -x "$FUSION4"; then
+    SNIFFER="$FUSION4"
+  else
+    echo "ERROR: Unable to find 'vmnet-sniffer'.  Checked: $FUSION4, $FUSION5" >> $LOG
+    exit 1
+  fi
+fi
+#echo "SNIFFER: $SNIFFER"
+ 
+if echo $VMNET | grep -q '^vmnet[0-9]$'; then
+  ERRCOUNT='0'
+ 
+  PIDSNIFF='0'
+  PIDTDUMP='0'
+  
+  CAPINTF=$VMNET
+  #CAPTMPF="/tmp/cuckoo-$PID"
+  CAPTMPD="$(dirname $PCAP)"
+  CAPTMPF="$CATMPD/vmnet-dump.pcap"
+
+  #mkdir -pv "$CAPTMPF" || let ERRCOUNT++ &
+  #sleep 2s
+
+  #if test ! -d "$CAPTMPF"; then
+  #  echo "ERROR: unable to create temp directory: $CAPTMPF"
+  #  exit 1
+  #fi
+
+  # VERY FUCKING TIRED.  It's been like a 16 hour day.
+  # We should be able to slim this crap down so the actual pcap is being written to the 
+  #CAPFILE="$(mktemp -p /tmp ${VMNET}.XXXXXXXXX)"
+  #chmod -Rv 700 $CAPTMPF || let ERRCOUNT++ &
+  #chown -Rv $USER $CAPTMPF || let ERRCOUNT++ &
+  #echo
+ 
+  #trap "rm -vrf $CAPTMPF \"${CAPFILE}\"" EXIT TERM INT
+  
+  shift
+ 
+  touch $PCAP
+  sudo chmod -v 644 "${PCAP}" "#{VMNET}" >> $LOG # This give us our cake and eat it too.  Total hack job.
+  echo "$SNIFFER" -e -w "${PCAP}" "${VMNET}" >> $LOG
+  sudo "$SNIFFER" -e -w "${PCAP}" "${VMNET}" 2>&1 | tee -a $LOG || let ERRCOUNT++ &
+  sudo chmod -v 644 "${PCAP}" "#{VMNET}" >> $LOG # This give us our cake and eat it too.  Total hack job.
+  #sudo chmod -v 660 "${PCAP}" "#{VMNET}" # This give us our cake and eat it too.  Total hack job.
+  #sudo "$SNIFFER" -w "${PCAP}" "${VMNET}" > /dev/null || let ERRCOUNT++ &
+
+  wait
+
+  #if rm -f "${CAPFILE}"; then
+    #if mkfifo "${CAPFILE}"; then
+      #"$SNIFFER" -w "${CAPFILE}" "${CAPINTF}" > /dev/null || let ERRCOUNT++ &
+      #sudo "$SNIFFER" -w "${PCAP}" -e "${VMNET}" #> /dev/null || let ERRCOUNT++ &
+      #sudo chmod 660 $PCAP $VMNET
+ 
+      #tcpdump -r "${CAPFILE}" ${*} || let ERRCOUNT++ &
+      #sudo tcpdump -r "${CAPFILE}" ${*} || let ERRCOUNT++ &
+      
+      #wait
+    #else
+      #let ERRCOUNT++
+    #fi
+  #else
+    #let ERRCOUNT++
+  #fi
+else
+  let ERRCOUNT++
+  echo "usage: $(basename ${0}) <vmnet interface> [tcpdump options]"
+fi
+ 
+exit "${ERRCOUNT}"
