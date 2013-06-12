@@ -13,11 +13,17 @@ import logging
 import hashlib
 import xmlrpclib
 from ctypes import *
+from time import sleep
 from threading import Lock, Thread
 from datetime import datetime
 
+
+from lib.core.config import Config
 from lib.common.constants import PATHS, TMP
+from lib.common.results import upload_to_host
+from lib.common.abstracts import Auxiliary, Package
 from lib.core.startup import create_folders, init_logging
+import modules.auxiliary as auxiliary
 
 # This looks to be the ticket for our process management.
 #from multiprocessing import Process, Manager, Pool
@@ -99,7 +105,7 @@ def dump_file(file_path):
     upload_path = os.path.join("files", str(random.randint(100000000, 9999999999)), file_name)
     try:
         # TBD
-        #upload_to_host(file_path, upload_path)
+        upload_to_host(file_path, upload_path)
         DUMPED_LIST.append(sha256)
     except (IOError, socket.error) as e:
         log.error("Unable to upload dropped file at path \"%s\": %s", file_path, e)
@@ -179,7 +185,7 @@ class Analyzer:
         # We update the target according to its category. If it's a file, then
         # we store the path.
         if self.config.category == "file":
-            self.target = os.path.join(os.environ["TEMP"] + os.sep,
+            self.target = os.path.join(TMP + os.sep,
                                        str(self.config.file_name))
         # If it's a URL, well.. we store the URL.
         else:
@@ -228,8 +234,195 @@ class Analyzer:
         @return: operation status.
         """
         self.prepare()
+
+        # Dummy file adds just to make sure stuff is working.        
+        dummy_files = [ "/etc/passwd", "/etc/group", "/etc/nsswitch.conf" ]        
+        for i in xrange(1, 20):
+            log.info("Pretending I'm doing something for the %d time" % i)
+            
+            if i % 6 and dummy_files:
+                add_file(dummy_files[-1])
+                dummy_files.pop()
+            sleep(1)
+        log.info("It's a miracle!  I'm done!")
         
         # TBD: Package() and Auxiliary() process pooling
+        # If no analysis package was specified at submission, we try to select
+        # one automatically.
+        if not self.config.package:
+            log.info("No analysis package specified, trying to detect it automagically")
+            # If the analysis target is a file, we choose the package according
+            # to the file format.
+            if self.config.category == "file":
+                package = choose_package(self.config.file_type, self.config.file_name)
+            # If it's an URL, we'll just use the default Internet Explorer
+            # package.
+            else:
+                package = "ie"
+
+            # If we weren't able to automatically determine the proper package,
+            # we need to abort the analysis.
+            if not package:
+                raise CuckooError("No valid package available for file type: %s"
+                                  % self.config.file_type)
+
+            log.info("Automatically selected analysis package \"%s\"", package)
+        # Otherwise just select the specified package.
+        else:
+            package = self.config.package
+            log.info("Selecting package %s", package)
+
+        # Generate the package path.
+        package_name = "modules.packages.%s" % package
+
+        # Try to import the analysis package.
+        try:
+            __import__(package_name, globals(), locals(), ["dummy"], -1)
+        # If it fails, we need to abort the analysis.
+        except ImportError:
+            raise CuckooError("Unable to import package \"{0}\", does not exist.".format(package_name))
+
+        # Initialize the package parent abstract.
+        Package()
+
+        # Enumerate the abstract's subclasses.
+        try:
+            package_class = Package.__subclasses__()[0]
+        except IndexError as e:
+            raise CuckooError("Unable to select package class (package={0}): {1}".format(package_name, e))
+
+        # Initialize the analysis package.
+        log.info("package_class: %s", package_class)
+        pack = package_class(self.get_options())
+        # Initialize Auxiliary modules
+        Auxiliary()
+        prefix = auxiliary.__name__ + "."
+        for loader, name, ispkg in pkgutil.iter_modules(auxiliary.__path__, prefix):
+            if ispkg:
+                continue
+
+            # Import the auxiliary module.
+            try:
+                __import__(name, globals(), locals(), ["dummy"], -1)
+            except ImportError as e:
+                log.warning("Unable to import the auxiliary module \"%s\": %s", name, e)
+
+        # Walk through the available auxiliary modules.
+        aux_enabled = []
+        for module in Auxiliary.__subclasses__():
+            # Try to start the auxiliary module.
+            try:
+                aux = module()
+                aux.start()
+            except (NotImplementedError, AttributeError):
+                log.warning("Auxiliary module %s was not implemented", aux.__class__.__name__)
+                continue
+            except Exception as e:
+                log.warning("Cannot execute auxiliary module %s: %s", aux.__class__.__name__, e)
+                continue
+            finally:
+                aux_enabled.append(aux)
+
+        # Start analysis package. If for any reason, the execution of the
+        # analysis package fails, we have to abort the analysis.
+        try:
+            pids = pack.start(self.target)
+        except NotImplementedError:
+            raise CuckooError("The package \"{0}\" doesn't contain a run "
+                              "function.".format(package_name))
+        except CuckooPackageError as e:
+            raise CuckooError("The package \"{0}\" start function raised an "
+                              "error: {1}".format(package_name, e))
+        except Exception as e:
+            raise CuckooError("The package \"{0}\" start function encountered "
+                              "an unhandled exception: {1}".format(package_name, e))
+
+        # If the analysis package returned a list of process IDs, we add them
+        # to the list of monitored processes and enable the process monitor.
+        if pids:
+            add_pids(pids)
+            pid_check = True
+        # If the package didn't return any process ID (for example in the case
+        # where the package isn't enabling any behavioral analysis), we don't
+        # enable the process monitor.
+        else:
+            log.info("No process IDs returned by the package, running for the full timeout")
+            pid_check = False
+
+        # Check in the options if the user toggled the timeout enforce. If so,
+        # we need to override pid_check and disable process monitor.
+        if self.config.enforce_timeout:
+            log.info("Enabled timeout enforce, running for the full timeout")
+            pid_check = False
+
+        time_counter = 0
+
+        while True:
+            time_counter += 1
+            if time_counter == int(self.config.timeout):
+                log.info("Analysis timeout hit, terminating analysis")
+                break
+
+            # If the process lock is locked, it means that something is
+            # operating on the list of monitored processes. Therefore we cannot
+            # proceed with the checks until the lock is released.
+            if PROCESS_LOCK.locked():
+                sleep(1000)
+                continue
+
+            try:
+                # If the process monitor is enabled we start checking whether
+                # the monitored processes are still alive.
+                if pid_check:
+                    for pid in PROCESS_LIST:
+                        if not Process(pid=pid).is_alive():
+                            log.info("Process with pid %s has terminated", pid)
+                            PROCESS_LIST.remove(pid)
+
+                    # If none of the monitored processes are still alive, we
+                    # can terminate the analysis.
+                    if len(PROCESS_LIST) == 0:
+                        log.info("Process list is empty, terminating analysis...")
+                        break
+
+                    # Update the list of monitored processes available to the
+                    # analysis package. It could be used for internal operations
+                    # within the module.
+                    pack.set_pids(PROCESS_LIST)
+
+                try:
+                    # The analysis packages are provided with a function that
+                    # is executed at every loop's iteration. If such function
+                    # returns False, it means that it requested the analysis
+                    # to be terminate.
+                    if not pack.check():
+                        log.info("The analysis package requested the termination of the analysis...")
+                        break
+                # If the check() function of the package raised some exception
+                # we don't care, we can still proceed with the analysis but we
+                # throw a warning.
+                except Exception as e:
+                    log.warning("The package \"%s\" check function raised "
+                                "an exception: %s", package_name, e)
+            finally:
+                # Zzz.
+                sleep(1000)
+
+        try:
+            # Before shutting down the analysis, the package can perform some
+            # final operations through the finish() function.
+            pack.finish()
+        except Exception as e:
+            log.warning("The package \"%s\" finish function raised an "
+                        "exception: %s", package_name, e)
+
+        # Terminate the Auxiliary modules.
+        for aux in aux_enabled:
+            try:
+                aux.stop()
+            except Exception as e:
+                log.warning("Cannot terminate auxiliary module %s: %s",
+                            aux.__class__.__name__, e)
 
         log.info("Starting analyzer from: %s" % os.getcwd())
         log.info("Storing results at: %s" % PATHS["output"])
@@ -269,6 +462,5 @@ if __name__ == "__main__":
     # back to the agent, notifying that it can report back to the host.
     finally:
         # Establish connection with the agent XMLRPC server.
-        #server = xmlrpclib.Server("http://127.0.0.1:8000")
-        #server.complete(success, error, PATHS["output"])
-        pass
+        server = xmlrpclib.Server("http://127.0.0.1:8000")
+        server.complete(success, error, PATHS["output"])
