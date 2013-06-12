@@ -6,16 +6,15 @@ import os
 import string
 import random
 
+# Try various environmentals for a temp directory or fall back to /tmp
+# Typically OS X has a $TMPDIR set for a user.
+TMP_DIRS = ( os.environ.get("TMPDIR"), os.environ.get("TEMP"), "/tmp" )
+TMP = [ tmp for tmp in TMP_DIRS 
+    if tmp and os.access(tmp, os.F_OK & os.R_OK & os.W_OK & os.X_OK) ][0]
+
 def _rand_string(a, b):
     return "".join(random.choice(string.ascii_lowercase)
                    for x in xrange(random.randint(a, b)))
-
-# Typically OS X has a $TMPDIR set, otherwise go with /tmp
-for tmp in [os.environ.get("TMPDIR"), os.environ.get("TEMP"), "/tmp"]:
-    if tmp and os.path.isdir(tmp):
-        TEMP=tmp # Just in case.
-        TMP=tmp
-
 
 # This was DriveLetter:\[6-10]\ in Windows, but that doesn't make
 # sense in the Unix world.  Let's go with /tmp instead.  I am also
