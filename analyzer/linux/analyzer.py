@@ -17,12 +17,12 @@ from time import sleep
 from threading import Lock, Thread
 from datetime import datetime
 
-
 from lib.core.config import Config
 from lib.common.constants import PATHS, TMP
 from lib.common.results import upload_to_host
 from lib.common.abstracts import Auxiliary, Package
 from lib.core.startup import create_folders, init_logging
+from lib.common.exceptions import CuckooError, CuckooPackageError
 import modules.auxiliary as auxiliary
 
 # This looks to be the ticket for our process management.
