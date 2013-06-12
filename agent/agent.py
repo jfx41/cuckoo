@@ -25,6 +25,11 @@ STATUS_COMPLETED = 0x0003
 STATUS_FAILED = 0x0004
 CURRENT_STATUS = STATUS_INIT
 
+# As new analyzers are added, update this with the results of:
+# platform.system().lower()
+UNIX_SYSTEMS = ( "linux" )
+
+TEMP_FOLDER = ""
 ERROR_MESSAGE = ""
 ANALYZER_FOLDER = ""
 RESULTS_FOLDER = ""
@@ -38,17 +43,31 @@ class Agent:
         self.analyzer_pid = 0
 
     def _initialize(self):
+        global TEMP_FOLDER
         global ERROR_MESSAGE
         global ANALYZER_FOLDER
-
+        
         if not ANALYZER_FOLDER:
             random.seed(time.time())
             container = "".join(random.choice(string.ascii_lowercase) for x in range(random.randint(5, 10)))
 
             if self.system == "windows":
                 ANALYZER_FOLDER = os.path.join(os.environ["SYSTEMDRIVE"] + os.sep, container)
-            elif self.system == "linux" or self.system == "darwin":
-                ANALYZER_FOLDER = os.path.join(os.environ["HOME"], container)
+                TEMP_FOLDER = os.environ["TEMP"]
+            elif self.system in UNIX_SYSTEMS:
+                # At least on OS X, if the agent is started by the system, and not a user,
+                # the environment doesn't have HOME set and this fails.  This tries to
+                # establish the preferred "/tmp" location (OSX sets $TMPDIR), or falling
+                # back on "/tmp" as a last resort.
+                temp_dirs = ( os.environ.get("TMPDIR"), os.environ.get("TEMP"), "/tmp" )
+                TEMP_FOLDER = [ tmp for tmp in temp_dirs
+                    if tmp and os.access(tmp, os.F_OK & os.R_OK & os.W_OK & os.X_OK) ][0]
+
+                # Set ANALYZER_FOLDER with $HOME or fall back on the discovered TEMP_FOLDER.
+                # Using os.environ.get() returns None if it's not set, where os.environ[""]
+                # raises an error.
+                home = os.environ.get("HOME") or "/tmp"
+                ANALYZER_FOLDER = os.path.join(home, container)
             else:
                 ERROR_MESSAGE = "Unable to identify operating system"
                 return False
@@ -60,7 +79,7 @@ class Agent:
                 return False
 
         return True
-
+            
     def get_status(self):
         """Get current status.
         @return: status.
@@ -82,10 +101,9 @@ class Agent:
         global ERROR_MESSAGE
         data = data.data
 
-        if self.system == "windows":
-            root = os.environ["TEMP"]
-        elif self.system == "linux" or self.system == "darwin":
-            root = "/tmp"
+        # Since TEMP_FOLDER was set globally, we can combine this.
+        if self.system == "windows" or self.system in UNIX_SYSTEMS:
+            root = TEMP_FOLDER
         else:
             ERROR_MESSAGE = "Unable to write malware to disk because of failed identification of the operating system"
             return False
