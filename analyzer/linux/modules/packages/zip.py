@@ -3,17 +3,20 @@
 # See the file 'docs/LICENSE' for copying permission.
 
 import os
+import subprocess
 from zipfile import ZipFile, BadZipfile
 
+from lib.common.constants import TMP
 from lib.common.abstracts import Package
 from lib.common.exceptions import CuckooPackageError
-from lib.api.process import Process
+#from lib.api.process import Process
+
 
 class Zip(Package):
     """Zip analysis package."""
 
     def start(self, path):
-        root = os.environ["TEMP"]
+        root = TMP
         password = self.options.get("password", None)
 
         with ZipFile(path, "r") as archive:
@@ -34,16 +37,19 @@ class Zip(Package):
         if free:
             suspended = False
 
-        p = Process()
-        if not p.execute(path=file_path, args=args, suspended=suspended):
-            raise CuckooPackageError("Unable to execute initial process, analysis aborted")
+        subprocess.call(["chmod", "+x", file_path])
+        return subprocess.Popen([file_path]).pid
+        
+        #Zip = Process()
+        #if not p.execute(path=file_path, args=args, suspended=suspended):
+        #    raise CuckooPackageError("Unable to execute initial process, analysis aborted")
 
-        if not free and suspended:
-            p.inject()
-            p.resume()
-            return p.pid
-        else:
-            return None
+        #if not free and suspended:
+        #    p.inject()
+        #    p.resume()
+        #    return p.pid
+        #else:
+        #    return None
 
     def check(self):
         return True
